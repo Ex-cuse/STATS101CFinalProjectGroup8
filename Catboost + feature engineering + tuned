@@ -1,1 +1,125 @@
-{"metadata":{"kernelspec":{"name":"ir","display_name":"R","language":"R"},"language_info":{"name":"R","codemirror_mode":"r","pygments_lexer":"r","mimetype":"text/x-r-source","file_extension":".r","version":"4.4.0"},"kaggle":{"accelerator":"none","dataSources":[{"sourceId":121108,"databundleVersionId":14486109,"sourceType":"competition"},{"sourceId":13871794,"sourceType":"datasetVersion","datasetId":8838244}],"dockerImageVersionId":30749,"isInternetEnabled":false,"language":"r","sourceType":"notebook","isGpuEnabled":false}},"nbformat_minor":4,"nbformat":4,"cells":[{"cell_type":"code","source":"# === Chunk 1: Setup ===\nlibrary(tidyverse)\nlibrary(pROC)\nlibrary(catboost)\n\nlibrary(lightgbm)\nset.seed(123)\n","metadata":{"trusted":true,"execution":{"iopub.status.busy":"2025-12-02T01:18:53.958973Z","iopub.execute_input":"2025-12-02T01:18:53.960740Z","iopub.status.idle":"2025-12-02T01:18:53.982296Z","shell.execute_reply":"2025-12-02T01:18:53.980320Z"}},"outputs":[],"execution_count":76},{"cell_type":"code","source":"# === Chunk 2: Load data ===\ntrain <- read.csv(\"/kaggle/input/f-2025-101-c-final-project-x/aluminum_coldRoll_train.csv\")\ntest  <- read.csv(\"/kaggle/input/f-2025-101-c-final-project-x/aluminum_coldRoll_testNoY.csv\")\n\nstr(train)\n","metadata":{"trusted":true,"execution":{"iopub.status.busy":"2025-12-02T01:18:53.985114Z","iopub.execute_input":"2025-12-02T01:18:53.986596Z","iopub.status.idle":"2025-12-02T01:18:55.650167Z","shell.execute_reply":"2025-12-02T01:18:55.648417Z"}},"outputs":[{"name":"stdout","text":"'data.frame':\t160000 obs. of  12 variables:\n $ ID                    : int  1 2 3 4 5 6 7 8 9 10 ...\n $ alloy                 : chr  \"2224\" \"2324\" \"6063\" \"2224\" ...\n $ cutTemp               : chr  \"med\" \"low\" \"med\" \"high\" ...\n $ rollTemp              : chr  \"med\" \"high\" \"low\" \"low\" ...\n $ firstPassRollPressure : int  500 575 450 600 525 450 400 400 450 425 ...\n $ secondPassRollPressure: int  350 325 350 500 425 425 325 300 425 350 ...\n $ topEdgeMicroChipping  : chr  \"no\" \"no\" \"no\" \"no\" ...\n $ blockSource           : chr  \"MasterAlloys\" \"Argon-Industries\" \"L27\" \"L27\" ...\n $ machineRestart        : chr  \"no\" \"no\" \"no\" \"no\" ...\n $ contourDefNdx         : int  5 2 2 5 5 2 2 2 2 5 ...\n $ clearPassNdx          : num  2.01 1.89 2.02 1.89 2.16 ...\n $ y_passXtremeDurability: int  0 1 1 0 0 0 0 0 0 0 ...\n","output_type":"stream"}],"execution_count":77},{"cell_type":"code","source":"# === Chunk 3: Preprocess for CatBoost ===\n\n# Categorical variables\ncat_vars <- c(\n  \"alloy\",\n  \"cutTemp\",\n  \"rollTemp\",\n  \"topEdgeMicroChipping\",\n  \"blockSource\",\n  \"machineRestart\"\n)\n\n# Convert to factors\nfor (v in cat_vars) {\n  if (v %in% names(train)) train[[v]] <- as.factor(train[[v]])\n  if (v %in% names(test))  test[[v]]  <- as.factor(test[[v]])\n}\n\n# Align levels between train & test\nfor (v in cat_vars) {\n  if (v %in% names(train) && v %in% names(test)) {\n    test[[v]] <- factor(test[[v]], levels = levels(train[[v]]))\n  }\n}\n\n# Target as numeric 0/1\ny_train <- train$y_passXtremeDurability\nif (!is.numeric(y_train)) {\n  y_train <- as.numeric(as.character(y_train))\n}\n\n# Feature data frames (no ID, no target)\nX_train_df <- train %>%\n  select(-ID, -y_passXtremeDurability)\n\nX_test_df <- test %>%\n  select(-ID)\n\n# Categorical feature indices for CatBoost (0-based)\ncat_feature_indices <- which(names(X_train_df) %in% cat_vars) - 1L\ncat(\"Categorical feature indices (0-based):\\n\")\nprint(cat_feature_indices)\n","metadata":{"trusted":true,"execution":{"iopub.status.busy":"2025-12-02T01:18:57.941257Z","iopub.execute_input":"2025-12-02T01:18:57.942704Z","iopub.status.idle":"2025-12-02T01:18:58.096513Z","shell.execute_reply":"2025-12-02T01:18:58.094665Z"}},"outputs":[{"name":"stdout","text":"Categorical feature indices (0-based):\n[1] 0 1 2 5 6 7\n","output_type":"stream"}],"execution_count":79},{"cell_type":"code","source":"# === Chunk 4: Train/validation split & pools ===\n\nset.seed(123)\nn <- nrow(X_train_df)\ntrain_size <- floor(0.8 * n)\nidx <- sample(seq_len(n), size = train_size)\n\n","metadata":{"trusted":true,"execution":{"iopub.status.busy":"2025-12-02T01:18:58.099299Z","iopub.execute_input":"2025-12-02T01:18:58.100756Z","iopub.status.idle":"2025-12-02T01:18:58.159517Z","shell.execute_reply":"2025-12-02T01:18:58.157616Z"}},"outputs":[],"execution_count":80},{"cell_type":"code","source":"# === Chunk 5: Feature engineering + 5-fold stratified CV ===\n\n# simple feature engineering on numeric columns\nfe_engineer <- function(df, cat_vars) {\n  out <- df\n  num_cols <- setdiff(names(df), cat_vars)\n  \n  for (col in num_cols) {\n    x <- out[[col]]\n    if (!is.numeric(x)) next\n    \n    # squared term\n    out[[paste0(col, \"_sq\")]] <- x^2\n    \n    # log1p term for strictly positive features\n    if (all(x > 0, na.rm = TRUE)) {\n      out[[paste0(col, \"_log1p\")]] <- log1p(x)\n    }\n  }\n  \n  out\n}\n\n# apply FE to existing train/test feature frames from earlier chunks\nX_train_fe <- fe_engineer(X_train_df, cat_vars)\nX_test_fe  <- fe_engineer(X_test_df,  cat_vars)\n\n# updated categorical feature indices (0-based) for engineered data\ncat_feature_indices_fe <- which(names(X_train_fe) %in% cat_vars) - 1L\n\n# full training pool with engineered features\nfull_pool_fe <- catboost.load_pool(\n  data         = X_train_fe,\n  label        = y_train,\n  cat_features = cat_feature_indices_fe\n)\n\n# final tuned hyperparameters from previous tuning\nfinal_params <- list(\n  loss_function     = \"Logloss\",\n  eval_metric       = \"Logloss\",\n  iterations        = 3000,\n  learning_rate     = 0.08,\n  depth             = 4,\n  l2_leaf_reg       = 3,\n  random_seed       = 123,\n  od_type           = \"Iter\",\n  od_wait           = 70,\n  use_best_model    = TRUE,\n  border_count      = 32,\n  min_data_in_leaf  = 5,\n  subsample         = 1,\n  random_strength   = 1\n)\n\n# 5-fold stratified CV on engineered data\ncv_res_fe <- catboost.cv(\n  pool                  = full_pool_fe,\n  params                = final_params,\n  fold_count            = 5,\n  type                  = \"Classical\",\n  partition_random_seed = 123,\n  stratified            = TRUE\n)\n\nbest_iter_fe  <- which.min(cv_res_fe$test.Logloss.mean)\nbest_cv_ll_fe <- cv_res_fe$test.Logloss.mean[best_iter_fe]\n\ncat(\"\\nBest 5-fold CV Logloss (FE):\", best_cv_ll_fe, \"\\n\")\ncat(\"Best iteration from CV (FE):\", best_iter_fe, \"\\n\")\n","metadata":{"trusted":true},"outputs":[],"execution_count":null},{"cell_type":"code","source":"# === Chunk 6: Retrain final CatBoost on FULL engineered data ===\n\nfinal_params$iterations     <- best_iter_fe\nfinal_params$use_best_model <- FALSE  # we already fixed iterations\n\ncat_model_full_fe <- catboost.train(\n  learn_pool = full_pool_fe,\n  params     = final_params\n)\n","metadata":{"trusted":true},"outputs":[],"execution_count":null},{"cell_type":"code","source":"# === Chunk 7: Predict on test (engineered) & create submission ===\n\ntest_pool_fe <- catboost.load_pool(\n  data         = X_test_fe,\n  cat_features = cat_feature_indices_fe\n)\n\ntest_probs_fe <- catboost.predict(\n  cat_model_full_fe,\n  test_pool_fe,\n  prediction_type = \"Probability\"\n)\n\n# ensure probabilities strictly in (0,1)\neps <- 1e-6\ntest_probs_fe <- pmin(pmax(test_probs_fe, eps), 1 - eps)\n\nsubmission_fe <- data.frame(\n  ID = test$ID,\n  y_passXtremeDurability = test_probs_fe\n)\n\nwrite.csv(submission_fe, \"submission_cv_fe.csv\", row.names = FALSE)\n","metadata":{"trusted":true},"outputs":[],"execution_count":null}]}
+# ============================================================
+# Aluminum Cold Roll – CatBoost with Feature Engineering (Kaggle)
+# ============================================================
+
+# --- 1. Setup ------------------------------------------------
+
+set.seed(123)
+
+library(tidyverse)
+library(pROC)
+library(catboost)
+library(lightgbm)  # optional, not used below
+
+
+# --- 2. Load data --------------------------------------------
+
+train <- read.csv("/kaggle/input/f-2025-101-c-final-project-x/aluminum_coldRoll_train.csv")
+test  <- read.csv("/kaggle/input/f-2025-101-c-final-project-x/aluminum_coldRoll_testNoY.csv")
+
+str(train)
+
+
+# --- 3. Basic preprocessing (factors, design matrices) -------
+
+# Categorical variables
+cat_vars <- c(
+  "alloy",
+  "cutTemp",
+  "rollTemp",
+  "topEdgeMicroChipping",
+  "blockSource",
+  "machineRestart"
+)
+
+# Convert to factors in train & test
+for (v in cat_vars) {
+  if (v %in% names(train)) train[[v]] <- as.factor(train[[v]])
+  if (v %in% names(test))  test[[v]]  <- as.factor(test[[v]])
+}
+
+# Align levels between train & test
+for (v in cat_vars) {
+  if (v %in% names(train) && v %in% names(test)) {
+    test[[v]] <- factor(test[[v]], levels = levels(train[[v]]))
+  }
+}
+
+# Target as numeric 0/1
+y_train <- train$y_passXtremeDurability
+if (!is.numeric(y_train)) {
+  y_train <- as.numeric(as.character(y_train))
+}
+
+# Feature data frames (no ID, no target)
+X_train_df <- train %>%
+  dplyr::select(-ID, -y_passXtremeDurability)
+
+X_test_df <- test %>%
+  dplyr::select(-ID)
+
+# (Optional) simple train/validation split
+set.seed(123)
+n          <- nrow(X_train_df)
+train_size <- floor(0.8 * n)
+idx        <- sample(seq_len(n), size = train_size)
+# X_tr  <- X_train_df[idx, , drop = FALSE]
+# y_tr  <- y_train[idx]
+# X_val <- X_train_df[-idx, , drop = FALSE]
+# y_val <- y_train[-idx]
+
+
+# --- 4. Feature engineering ----------------------------------
+
+fe_engineer <- function(df, cat_vars) {
+  out <- df
+  num_cols <- setdiff(names(df), cat_vars)
+  
+  for (col in num_cols) {
+    x <- out[[col]]
+    if (!is.numeric(x)) next
+    
+    # squared term
+    out[[paste0(col, "_sq")]] <- x^2
+    
+    # log1p term for strictly positive features
+    if (all(x > 0, na.rm = TRUE)) {
+      out[[paste0(col, "_log1p")]] <- log1p(x)
+    }
+  }
+  
+  out
+}
+
+# Apply FE to train/test feature frames
+X_train_fe <- fe_engineer(X_train_df, cat_vars)
+X_test_fe  <- fe_engineer(X_test_df,  cat_vars)
+
+# Categorical feature indices for CatBoost (0-based) in FE matrices
+cat_feature_indices_fe <- which(names(X_train_fe) %in% cat_vars) - 1L
+
+cat("Categorical feature indices (0-based):\n")
+print(cat_feature_indices_fe)
+
+
+# --- 5. 5-fold stratified CV on engineered data --------------
+
+# Full training pool with engineered features
+full_pool_fe <- catboost.load_pool(
+  data         = X_train_fe,
+  label        = y_train,
+  cat_features = cat_feature_indices_fe
+)
+
+# Final tuned hyperparameters
+final_params <- list(
+  loss_function     = "Logloss",
+  eval_metric       = "Logloss",
+  iterations        = 3000,
+  learning_rate     = 0.08,
+  depth             = 4,
+  l2_leaf_reg       = 3,
+  random_seed       = 123,
+  od_type           = "Iter",
+  od_wait           = 70,
+  use_be_
