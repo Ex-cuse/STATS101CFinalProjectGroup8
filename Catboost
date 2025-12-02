@@ -1,1 +1,171 @@
-{"metadata":{"kernelspec":{"name":"ir","display_name":"R","language":"R"},"language_info":{"name":"R","codemirror_mode":"r","pygments_lexer":"r","mimetype":"text/x-r-source","file_extension":".r","version":"4.4.0"},"kaggle":{"accelerator":"none","dataSources":[{"sourceId":121108,"databundleVersionId":14486109,"sourceType":"competition"}],"dockerImageVersionId":30749,"isInternetEnabled":false,"language":"r","sourceType":"notebook","isGpuEnabled":false}},"nbformat_minor":4,"nbformat":4,"cells":[{"cell_type":"code","source":"############################################################\n# 0. Install/load packages (only if missing)\n############################################################\nlibrary(tidyverse) \nlibrary(catboost)\nlibrary(pROC)\nlibrary(h2o)","metadata":{"_uuid":"051d70d956493feee0c6d64651c6a088724dca2a","_execution_state":"idle","trusted":true,"execution":{"iopub.status.busy":"2025-11-22T04:03:10.654577Z","iopub.execute_input":"2025-11-22T04:03:10.656558Z","iopub.status.idle":"2025-11-22T04:03:12.728009Z","shell.execute_reply":"2025-11-22T04:03:12.726145Z"}},"outputs":[{"name":"stderr","text":"── \u001b[1mAttaching core tidyverse packages\u001b[22m ──────────────────────── tidyverse 2.0.0 ──\n\u001b[32m✔\u001b[39m \u001b[34mdplyr    \u001b[39m 1.1.4     \u001b[32m✔\u001b[39m \u001b[34mreadr    \u001b[39m 2.1.5\n\u001b[32m✔\u001b[39m \u001b[34mforcats  \u001b[39m 1.0.0     \u001b[32m✔\u001b[39m \u001b[34mstringr  \u001b[39m 1.5.1\n\u001b[32m✔\u001b[39m \u001b[34mggplot2  \u001b[39m 3.5.1     \u001b[32m✔\u001b[39m \u001b[34mtibble   \u001b[39m 3.2.1\n\u001b[32m✔\u001b[39m \u001b[34mlubridate\u001b[39m 1.9.3     \u001b[32m✔\u001b[39m \u001b[34mtidyr    \u001b[39m 1.3.1\n\u001b[32m✔\u001b[39m \u001b[34mpurrr    \u001b[39m 1.0.2     \n── \u001b[1mConflicts\u001b[22m ────────────────────────────────────────── tidyverse_conflicts() ──\n\u001b[31m✖\u001b[39m \u001b[34mdplyr\u001b[39m::\u001b[32mfilter()\u001b[39m masks \u001b[34mstats\u001b[39m::filter()\n\u001b[31m✖\u001b[39m \u001b[34mdplyr\u001b[39m::\u001b[32mlag()\u001b[39m    masks \u001b[34mstats\u001b[39m::lag()\n\u001b[36mℹ\u001b[39m Use the conflicted package (\u001b[3m\u001b[34m<http://conflicted.r-lib.org/>\u001b[39m\u001b[23m) to force all conflicts to become errors\nType 'citation(\"pROC\")' for a citation.\n\n\nAttaching package: ‘pROC’\n\n\nThe following objects are masked from ‘package:stats’:\n\n    cov, smooth, var\n\n\n\n----------------------------------------------------------------------\n\nYour next step is to start H2O:\n    > h2o.init()\n\nFor H2O package documentation, ask for help:\n    > ??h2o\n\nAfter starting H2O, you can use the Web UI at http://localhost:54321\nFor more information visit https://docs.h2o.ai\n\n----------------------------------------------------------------------\n\n\n\nAttaching package: ‘h2o’\n\n\nThe following object is masked from ‘package:pROC’:\n\n    var\n\n\nThe following objects are masked from ‘package:lubridate’:\n\n    day, hour, month, week, year\n\n\nThe following objects are masked from ‘package:stats’:\n\n    cor, sd, var\n\n\nThe following objects are masked from ‘package:base’:\n\n    &&, %*%, %in%, ||, apply, as.factor, as.numeric, colnames,\n    colnames<-, ifelse, is.character, is.factor, is.numeric, log,\n    log10, log1p, log2, round, signif, trunc\n\n\n","output_type":"stream"}],"execution_count":1},{"cell_type":"code","source":"############################################################\n# 1. Load data\n############################################################\n\ntrain <- read.csv(\"/kaggle/input/f-2025-101-c-final-project-x/aluminum_coldRoll_train.csv\")\ntest  <- read.csv(\"/kaggle/input/f-2025-101-c-final-project-x/aluminum_coldRoll_testNoY.csv\")\n\nstr(train)","metadata":{"trusted":true,"execution":{"iopub.status.busy":"2025-11-22T04:03:19.449215Z","iopub.execute_input":"2025-11-22T04:03:19.481903Z","iopub.status.idle":"2025-11-22T04:03:21.612767Z","shell.execute_reply":"2025-11-22T04:03:21.610824Z"}},"outputs":[{"name":"stdout","text":"'data.frame':\t160000 obs. of  12 variables:\n $ ID                    : int  1 2 3 4 5 6 7 8 9 10 ...\n $ alloy                 : chr  \"2224\" \"2324\" \"6063\" \"2224\" ...\n $ cutTemp               : chr  \"med\" \"low\" \"med\" \"high\" ...\n $ rollTemp              : chr  \"med\" \"high\" \"low\" \"low\" ...\n $ firstPassRollPressure : int  500 575 450 600 525 450 400 400 450 425 ...\n $ secondPassRollPressure: int  350 325 350 500 425 425 325 300 425 350 ...\n $ topEdgeMicroChipping  : chr  \"no\" \"no\" \"no\" \"no\" ...\n $ blockSource           : chr  \"MasterAlloys\" \"Argon-Industries\" \"L27\" \"L27\" ...\n $ machineRestart        : chr  \"no\" \"no\" \"no\" \"no\" ...\n $ contourDefNdx         : int  5 2 2 5 5 2 2 2 2 5 ...\n $ clearPassNdx          : num  2.01 1.89 2.02 1.89 2.16 ...\n $ y_passXtremeDurability: int  0 1 1 0 0 0 0 0 0 0 ...\n","output_type":"stream"}],"execution_count":2},{"cell_type":"code","source":"# Categorical variables\ncat_vars <- c(\n  \"alloy\",\n  \"cutTemp\",\n  \"rollTemp\",\n  \"topEdgeMicroChipping\",\n  \"blockSource\",\n  \"machineRestart\"\n)\n\n# Convert to factors\nfor (v in cat_vars) {\n  if (v %in% names(train)) train[[v]] <- as.factor(train[[v]])\n  if (v %in% names(test))  test[[v]]  <- as.factor(test[[v]])\n}\n\n# Align levels between train & test\nfor (v in cat_vars) {\n  if (v %in% names(train) && v %in% names(test)) {\n    test[[v]] <- factor(test[[v]], levels = levels(train[[v]]))\n  }\n}\n\n# Target as numeric 0/1\ny_train <- train$y_passXtremeDurability\nif (!is.numeric(y_train)) {\n  y_train <- as.numeric(as.character(y_train))\n}\n\n# Feature data frames (drop ID & target)\nX_train_df <- train %>%\n  select(-ID, -y_passXtremeDurability)\n\nX_test_df <- test %>%\n  select(-ID)\n\n# Categorical feature indices for CatBoost (0-based)\ncat_feature_indices <- which(names(X_train_df) %in% cat_vars) - 1L\ncat(\"Categorical feature indices (0-based):\\n\")\nprint(cat_feature_indices)\n","metadata":{"trusted":true,"execution":{"iopub.status.busy":"2025-11-22T04:20:38.855377Z","iopub.execute_input":"2025-11-22T04:20:38.857054Z","iopub.status.idle":"2025-11-22T04:20:38.979748Z","shell.execute_reply":"2025-11-22T04:20:38.977913Z"}},"outputs":[{"name":"stdout","text":"Categorical feature indices (0-based):\n[1] 0 1 2 5 6 7\n","output_type":"stream"}],"execution_count":9},{"cell_type":"code","source":"# Train/validation split\nset.seed(123)\nn <- nrow(X_train_df)\ntrain_size <- floor(0.8 * n)\nidx <- sample(seq_len(n), size = train_size)\n\nX_tr_df  <- X_train_df[idx, , drop = FALSE]\ny_tr     <- y_train[idx]\n\nX_val_df <- X_train_df[-idx, , drop = FALSE]\ny_val    <- y_train[-idx]\n\ntrain_pool <- catboost.load_pool(\n  data         = X_tr_df,\n  label        = y_tr,\n  cat_features = cat_feature_indices\n)\n\nvalid_pool <- catboost.load_pool(\n  data         = X_val_df,\n  label        = y_val,\n  cat_features = cat_feature_indices\n)\n\n# Log-loss function (same as competition metric)\nlog_loss <- function(y, p) {\n  eps <- 1e-15\n  p <- pmin(pmax(p, eps), 1 - eps)\n  -mean(y * log(p) + (1 - y) * log(1 - p))\n}\n","metadata":{"trusted":true,"execution":{"execution_failed":"2025-11-22T10:00:15.533Z"}},"outputs":[],"execution_count":null},{"cell_type":"code","source":"# Hyperparameter search space\ndepth_choices         <- c(4, 6, 8, 10)\nlr_choices            <- c(0.02, 0.03, 0.04, 0.05, 0.07)\nl2_choices            <- c(1, 3, 5, 7, 10)\nbagging_temp_choices  <- c(0, 0.5, 1, 2)\nborder_count_choices  <- c(128, 254)\nleaf_estimation_choices <- c(\"Newton\", \"Gradient\")\n\n# how many random combinations to try\nn_trials <- 25  # bump to 40–60 if you have time\n\nbest_ll     <- Inf\nbest_params <- NULL\nbest_model  <- NULL\n\nfor (i in 1:n_trials) {\n  set.seed(123 + i)\n  \n  params_try <- list(\n    loss_function         = \"Logloss\",\n    eval_metric           = \"Logloss\",\n    iterations            = 5000,              # large cap; early stopping will cut it\n    learning_rate         = sample(lr_choices, 1),\n    depth                 = sample(depth_choices, 1),\n    l2_leaf_reg           = sample(l2_choices, 1),\n    random_seed           = 123 + i,\n    od_type               = \"Iter\",\n    od_wait               = 100,               # patience for early stopping\n    use_best_model        = TRUE,\n    bootstrap_type        = \"Bayesian\",\n    bagging_temperature   = sample(bagging_temp_choices, 1),\n    border_count          = sample(border_count_choices, 1),\n    leaf_estimation_method = sample(leaf_estimation_choices, 1),\n    grow_policy           = \"Lossguide\"\n  )\n  \n  cat(\"\\nTrial\", i, \"params:\\n\")\n  print(params_try)\n  \n  model_try <- catboost.train(\n    learn_pool = train_pool,\n    test_pool  = valid_pool,\n    params     = params_try\n  )\n  \n  preds_val <- catboost.predict(\n    model_try,\n    valid_pool,\n    prediction_type = \"Probability\"\n  )\n  \n  ll <- log_loss(y_val, preds_val)\n  cat(\" -> Validation logloss:\", ll, \"\\n\")\n  \n  if (ll < best_ll) {\n    best_ll     <- ll\n    best_params <- params_try\n    best_model  <- model_try\n    cat(\"*** New best model! logloss =\", best_ll, \"\\n\")\n  }\n}\n\ncat(\"\\nBest Validation Logloss:\", best_ll, \"\\n\")\ncat(\"Best Params:\\n\"); print(best_params)\n","metadata":{"trusted":true,"execution":{"execution_failed":"2025-11-22T10:00:15.532Z"}},"outputs":[],"execution_count":null},{"cell_type":"code","source":"# Retrain on FULL training data using best params & best tree count\nfull_pool <- catboost.load_pool(\n  data         = X_train_df,\n  label        = y_train,\n  cat_features = cat_feature_indices\n)\n\nbest_trees <- best_model$tree_count\ncat(\"Best tree count used:\", best_trees, \"\\n\")\n\nbest_params_full <- best_params\nbest_params_full$iterations <- best_trees  # limit to best iteration from valid run\n\ncat_model_full <- catboost.train(\n  learn_pool = full_pool,\n  params     = best_params_full\n)\n","metadata":{"trusted":true,"execution":{"iopub.status.busy":"2025-11-22T04:48:51.042888Z","iopub.execute_input":"2025-11-22T04:48:51.044497Z","iopub.status.idle":"2025-11-22T04:54:36.515863Z","shell.execute_reply":"2025-11-22T04:54:36.506167Z"}},"outputs":[{"name":"stdout","text":"Best tree count used: 783 \n","output_type":"stream"}],"execution_count":14},{"cell_type":"code","source":"test_pool <- catboost.load_pool(\n  data         = X_test_df,\n  cat_features = cat_feature_indices\n)\n\ntest_probs <- catboost.predict(\n  cat_model_full,\n  test_pool,\n  prediction_type = \"Probability\"\n)\n\n# Ensure strictly in (0,1)\neps <- 1e-6\ntest_probs <- pmin(pmax(test_probs, eps), 1 - eps)\n\nsubmission <- data.frame(\n  ID = test$ID,\n  y_passXtremeDurability = test_probs\n)\n\nhead(submission)\n\nwrite.csv(submission, \"submission.csv\", row.names = FALSE)\n","metadata":{"trusted":true,"execution":{"execution_failed":"2025-11-22T10:00:15.533Z"}},"outputs":[],"execution_count":null}]}
+# ============================================================
+# Aluminum Cold Roll – CatBoost with Pseudo-Labeling Ensemble
+# ============================================================
+
+# --- 1. Setup ------------------------------------------------
+
+set.seed(123)
+
+library(tidyverse)
+library(pROC)
+library(catboost)
+library(lightgbm)  # optional
+library(caret)     # optional
+
+
+# --- 2. Load data --------------------------------------------
+
+train <- read.csv("/kaggle/input/f-2025-101-c-final-project-x/aluminum_coldRoll_train.csv")
+test  <- read.csv("/kaggle/input/f-2025-101-c-final-project-x/aluminum_coldRoll_testNoY.csv")
+
+str(train)
+
+
+# --- 3. Basic preprocessing (factors, design matrices) -------
+
+# Categorical variables
+cat_vars <- c(
+  "alloy",
+  "cutTemp",
+  "rollTemp",
+  "topEdgeMicroChipping",
+  "blockSource",
+  "machineRestart"
+)
+
+# Convert to factors in train & test
+for (v in cat_vars) {
+  if (v %in% names(train)) train[[v]] <- as.factor(train[[v]])
+  if (v %in% names(test))  test[[v]]  <- as.factor(test[[v]])
+}
+
+# Align levels between train & test
+for (v in cat_vars) {
+  if (v %in% names(train) && v %in% names(test)) {
+    test[[v]] <- factor(test[[v]], levels = levels(train[[v]]))
+  }
+}
+
+# Target as numeric 0/1
+y_train <- train$y_passXtremeDurability
+if (!is.numeric(y_train)) {
+  y_train <- as.numeric(as.character(y_train))
+}
+
+# Feature data frames (no ID, no target)
+X_train_df <- train %>%
+  dplyr::select(-ID, -y_passXtremeDurability)
+
+X_test_df <- test %>%
+  dplyr::select(-ID)
+
+# If you later build FE features, replace these:
+X_train_fe <- X_train_df
+X_test_fe  <- X_test_df
+
+# Categorical feature indices for CatBoost (0-based)
+cat_feature_indices_fe <- which(names(X_train_fe) %in% cat_vars) - 1L
+
+cat("Categorical feature indices (0-based):\n")
+print(cat_feature_indices_fe)
+
+
+# --- 4. (Optional) simple train/validation split  ------------
+
+set.seed(123)
+n          <- nrow(X_train_df)
+train_size <- floor(0.8 * n)
+idx        <- sample(seq_len(n), size = train_size)
+
+# (If needed:)
+# X_tr <- X_train_df[idx, , drop = FALSE]
+# y_tr <- y_train[idx]
+# X_val <- X_train_df[-idx, , drop = FALSE]
+# y_val <- y_train[-idx]
+
+
+# --- 5. CV on original FE data + generate pseudo labels ------
+
+# Full pool on original labeled data
+full_pool_fe <- catboost.load_pool(
+  data         = X_train_fe,
+  label        = y_train,
+  cat_features = cat_feature_indices_fe
+)
+
+# CatBoost parameters
+final_params <- list(
+  loss_function     = "Logloss",
+  eval_metric       = "Logloss",
+  iterations        = 3500,
+  learning_rate     = 0.08,
+  depth             = 4,
+  border_count      = 32,
+  l2_leaf_reg       = 1.5,
+  min_data_in_leaf  = 1,
+  random_strength   = 0,
+  bootstrap_type    = "No",
+  random_seed       = 123,
+  od_type           = "Iter",
+  od_wait           = 100,
+  use_best_model    = TRUE
+)
+
+cat("Running 5-fold CV on original FE data...\n")
+
+cv_res_fe <- catboost.cv(
+  pool                  = full_pool_fe,
+  params                = final_params,
+  fold_count            = 5,
+  type                  = "Classical",
+  partition_random_seed = 123,
+  stratified            = TRUE
+)
+
+best_iter_fe  <- which.min(cv_res_fe$test.Logloss.mean)
+best_cv_ll_fe <- cv_res_fe$test.Logloss.mean[best_iter_fe]
+
+cat("\nOriginal FE 5-fold CV Logloss:", best_cv_ll_fe, "\n")
+cat("Best iteration (original FE):", best_iter_fe, "\n")
+
+# Retrain base model on ALL labeled data using best iteration
+base_params <- final_params
+base_params$iterations     <- best_iter_fe
+base_params$use_best_model <- FALSE
+base_params$od_type        <- NULL   # disable OD when training final model
+
+cat("\nTraining base CatBoost on full labeled data...\n")
+
+base_model_full <- catboost.train(
+  learn_pool = full_pool_fe,
+  params     = base_params
+)
+
+# Predict on test to get pseudo-label candidates
+test_pool_fe <- catboost.load_pool(
+  data         = X_test_fe,
+  cat_features = cat_feature_indices_fe
+)
+
+test_probs_base <- catboost.predict(
+  base_model_full,
+  test_pool_fe,
+  prediction_type = "Probability"
+)
+
+# Select confident pseudo-labels
+high_thr <- 0.98
+low_thr  <- 0.02
+
+pos_idx    <- which(test_probs_base >= high_thr)
+neg_idx    <- which(test_probs_base <= low_thr)
+pseudo_idx <- sort(unique(c(pos_idx, neg_idx)))
+
+cat("\nPseudo-label thresholds: [", low_thr, ",", high_thr, "]\n", sep = "")
+cat("Pseudo-labeled test rows:", length(pseudo_idx), "\n")
+
+# Create pseudo labels (0/1) from prob threshold 0.5
+pseudo_y <- ifelse(test_probs_base[pseudo_idx] >= 0.5, 1, 0)
+
+# Build augmented training set
+X_pseudo <_
