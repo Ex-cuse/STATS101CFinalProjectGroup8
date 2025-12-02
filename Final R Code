@@ -1,0 +1,77 @@
+# ============================================================
+# Aluminum Cold Roll – CatBoost with Pseudo-Labeling Ensemble
+# ============================================================
+
+# --- 1. Setup ------------------------------------------------
+
+set.seed(123)
+
+library(tidyverse)
+library(pROC)
+library(catboost)
+library(lightgbm)  # currently unused, but kept in case you add LGBM
+library(caret)     # currently unused, but kept if you add caret utilities
+
+
+# --- 2. Load data --------------------------------------------
+
+train <- read.csv("/kaggle/input/f-2025-101-c-final-project-x/aluminum_coldRoll_train.csv")
+test  <- read.csv("/kaggle/input/f-2025-101-c-final-project-x/aluminum_coldRoll_testNoY.csv")
+
+str(train)
+
+
+# --- 3. Basic preprocessing (factors, design matrices) -------
+
+# Categorical variables
+cat_vars <- c(
+  "alloy",
+  "cutTemp",
+  "rollTemp",
+  "topEdgeMicroChipping",
+  "blockSource",
+  "machineRestart"
+)
+
+# Convert to factors in train & test
+for (v in cat_vars) {
+  if (v %in% names(train)) train[[v]] <- as.factor(train[[v]])
+  if (v %in% names(test))  test[[v]]  <- as.factor(test[[v]])
+}
+
+# Align levels between train & test
+for (v in cat_vars) {
+  if (v %in% names(train) && v %in% names(test)) {
+    test[[v]] <- factor(test[[v]], levels = levels(train[[v]]))
+  }
+}
+
+# Target as numeric 0/1
+y_train <- train$y_passXtremeDurability
+if (!is.numeric(y_train)) {
+  y_train <- as.numeric(as.character(y_train))
+}
+
+# Feature data frames (no ID, no target)
+X_train_df <- train %>%
+  dplyr::select(-ID, -y_passXtremeDurability)
+
+X_test_df <- test %>%
+  dplyr::select(-ID)
+
+# In case you have a separate feature-engineered version, plug it in here.
+# For now, we just set FE = original design matrices.
+X_train_fe <- X_train_df
+X_test_fe  <- X_test_df
+
+# Categorical feature indices for CatBoost (0-based)
+cat_feature_indices_fe <- which(names(X_train_fe) %in% cat_vars) - 1L
+
+cat("Categorical feature indices (0-based):\n")
+print(cat_feature_indices_fe)
+
+
+# --- 4. (Optional) simple train/validation split  ------------
+
+set.seed(123)
+n          <- nrow(X
